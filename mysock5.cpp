@@ -6,7 +6,8 @@
 #include <mutex>
 #include <map>
 #include <atomic>
-
+#include <fstream>
+#include "lib/json.hpp"
 #include <cstring>
 
 #include <sys/socket.h>
@@ -14,26 +15,15 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <netdb.h>
+#include "utils.h"
 
-bool matches_cidr(const std::string& destination, const std::string& cidr){
-  if(cidr == "0.0.0.0/0") return true;
-  int slashpos = cidr.find('/');
-  if(slashpos == std::string::npos){
-    return destination == cidr;
-  }
-  std::string cidr_ip = cidr.substr(0, slashpos);
-  int prefix_bits = std::stoi(cidr.substr(slashpos + 1));
+using json = nlohmann::json;
 
-  uint32_t ip_num = ntohl(inet_addr(destination.c_str()));
-  uint32_t cidr_ip_num = ntohl(inet_addr(cidr_ip.c_str()));
-
-  uint32_t mask  = prefix_bits == 0 ? 0: ~(( 1 << (32-prefix_bits)) - 1 );
-  return ( ip_num & mask ) == ( cidr_ip_num & mask );
-}
 
 class sock5 {
 private:
   int server_socket_;
+
   std::atomic<bool> running_{false};
   std::vector<std::thread> client_threads_;
   std::mutex rate_limit_mtx;
@@ -54,7 +44,7 @@ private:
   int max_connections_per_minute_;
 public:
     sock5(const std::string& username = "", const std::string& password = "",
-                int max_connections = 60)
+                int max_connections = 2)
         : server_socket_(-1), username_(username), password_(password),
           max_connections_per_minute_(max_connections) {
         auth_required_ = !username_.empty() || !password_.empty();
@@ -451,19 +441,19 @@ METHODS 有NMETHODS个字节
 };
 
 int main(){
+  std::ifstream config_file ("config.json");
+  if(!config_file){
+    std::cerr << "Failed to open config.json\n";
+    return 1;
+  }
+  json config;
+  config_file >> config;
+  std::string usr = config.value("username", "");
+  std::string pass = config.value("password", "");
+  std::vector<std::string> allowed_destinations = config.value("allowed_destinations", std::vector<std::string>());
+  std::vector<std::string> blocked_destinations = config.value("blocked_destinations", std::vector<std::string>());
   // sock5 s5;
-  sock5 s5("admin", "aaa");
-      std::vector<std::string> allowed_destinations = {
-        "192.168.1.0/24",    // Allow local network
-        "10.0.0.0/8",        // Allow private network
-        "93.184.216.34",      // Allow example.com
-        "157.148.69.151"
-    };
-
-    std::vector<std::string> blocked_destinations = {
-        "192.168.1.100",     // Block specific IP
-        "10.0.0.50"          // Block another specific IP
-    };
+  sock5 s5(usr, pass);
 
     s5.set_allowed_destinations(allowed_destinations);
     s5.set_blocked_destinations(blocked_destinations);
