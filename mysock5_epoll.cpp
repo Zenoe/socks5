@@ -1,4 +1,4 @@
-// g++ -std=c++17 -o mysocks5_proxy mysock5.cpp -lpthread -g
+//  g++ -std=c++17 -o epoll_mysocks5_proxy mysock5_epoll.cpp utils.cpp -lpthread -g
 #include <iostream>
 #include <string>
 #include <vector>
@@ -119,7 +119,7 @@ public:
     }
 
     epoll_event ev{};
-    ev.events = EPOLLIN || EPOLLET;
+    ev.events = EPOLLIN | EPOLLET;
     ev.data.fd = server_socket_;
     if(epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, server_socket_, &ev) < 0){
       logger_->log(LogLevel::ERROR, "Epoll_ctl failed: " + std::string(strerror(errno)));
@@ -165,13 +165,13 @@ public:
   }
 
   void handle_new_connection(){
-    while(1){
+    while(true){
       sockaddr_in client_addr{};
       socklen_t client_len = sizeof(client_addr);
       int client_socket = accept4(server_socket_, (sockaddr*)&client_addr, &client_len, SOCK_NONBLOCK);
       if(client_socket < 0){
         if(errno == EAGAIN || errno == EWOULDBLOCK) {
-          break; // no more connections. why?
+          break;
         }
         logger_->log(LogLevel::ERROR, "Accept failed: " + std::string(strerror(errno)));
         break;
@@ -212,49 +212,54 @@ public:
     }
   }
 
-    void handle_client_event(const epoll_event& event) {
-        int fd = event.data.fd;
+  void handle_client_event(const epoll_event &event) {
+    int fd = event.data.fd;
 
-        std::lock_guard<std::mutex> lock(connections_mutex_);
-        auto it = connections_.find(fd);
-        if (it == connections_.end()) {
-            return;
-        }
-
-        ConnectionInfo& conn_info = it->second;
-        conn_info.last_activity = time(nullptr);
-
-        if (event.events & EPOLLRDHUP || event.events & EPOLLHUP || event.events & EPOLLERR) {
-            close_connection(fd, "Connection closed or error");
-            return;
-        }
-
-        try {
-            switch (conn_info.state) {
-                case ConnectionState::HANDSHAKE:
-                    std::cout << "HANDSHAKE\n";
-                    handle_handshake(fd, conn_info);
-                    break;
-                case ConnectionState::AUTHENTICATION:
-                  std::cout << "AUTHENTICATION\n";
-                    handle_authentication(fd, conn_info);
-                    break;
-                case ConnectionState::REQUEST:
-                    handle_request(fd, conn_info);
-                    break;
-                case ConnectionState::FORWARDING:
-                    handle_forwarding(fd, conn_info, event.events);
-                    break;
-                case ConnectionState::CLOSING:
-                    close_connection(fd, "Closing state");
-                    break;
-            }
-        } catch (const std::exception& e) {
-            logger_->log(LogLevel::ERROR, "Error handling connection: " + std::string(e.what()),
-                       conn_info.client_ip);
-            close_connection(fd, "Exception: " + std::string(e.what()));
-        }
+    std::unique_lock<std::mutex> lock(connections_mutex_);
+    auto it = connections_.find(fd);
+    if (it == connections_.end()) {
+      return;
     }
+
+    ConnectionInfo &conn_info = it->second;
+    conn_info.last_activity = time(nullptr);
+
+    if (event.events & EPOLLRDHUP || event.events & EPOLLHUP ||
+        event.events & EPOLLERR) {
+      // ipt
+      lock.unlock();
+      close_connection(fd, "Connection closed or error");
+      return;
+    }
+
+    lock.unlock();
+    try {
+      switch (conn_info.state) {
+      case ConnectionState::HANDSHAKE:
+        std::cout << "HANDSHAKE\n";
+        handle_handshake(fd, conn_info);
+        break;
+      case ConnectionState::AUTHENTICATION:
+        std::cout << "AUTHENTICATION\n";
+        handle_authentication(fd, conn_info);
+        break;
+      case ConnectionState::REQUEST:
+        handle_request(fd, conn_info);
+        break;
+      case ConnectionState::FORWARDING:
+        handle_forwarding(fd, conn_info, event.events);
+        break;
+      case ConnectionState::CLOSING:
+        close_connection(fd, "Closing state");
+        break;
+      }
+    } catch (const std::exception &e) {
+      logger_->log(LogLevel::ERROR,
+                   "Error handling connection: " + std::string(e.what()),
+                   conn_info.client_ip);
+      close_connection(fd, "Exception: " + std::string(e.what()));
+    }
+  }
 
   void close_connection(int fd, const std::string& reason){
     std::lock_guard<std::mutex> lock(connections_mutex_);
@@ -268,8 +273,9 @@ public:
 
     epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr);
 
-    if(conn_info.state == ConnectionState::FORWARDING && conn_info.user_data){
-      int peer_fd = *static_cast<int*>(conn_info.user_data.get());
+    if(conn_info.state == ConnectionState::FORWARDING && conn_info.target_fd){
+      // int peer_fd = *static_cast<int*>(conn_info.user_data.get());
+      int peer_fd = conn_info.target_fd;
       auto peer_it = connections_.find(peer_fd);
       if(peer_it != connections_.end()){
         epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, peer_fd, nullptr);
@@ -526,12 +532,14 @@ private:
     target_info.target_port = conn_info.target_port;
     target_info.created_at = time(nullptr);
     target_info.last_activity = time(nullptr);
-    target_info.user_data = std::make_shared<int>(client_socket); // Link to client, why
+    // target_info.user_data = std::make_shared<int>(client_socket); // Link to client, why
+    target_info.target_fd = client_socket;
 
     connections_[target_socket] = target_info;
     stats_.active_connections++;
 
-    conn_info.user_data = std::make_shared<int>(target_socket);
+    // conn_info.user_data = std::make_shared<int>(target_socket);
+    conn_info.target_fd = target_socket;
     conn_info.state = ConnectionState::FORWARDING;
 
     logger_->log(LogLevel::INFO, "Connected to " + conn_info.target_host + ":" +
@@ -544,7 +552,8 @@ private:
   }
 
   void handle_forwarding(int fd, ConnectionInfo& conn_info, uint32_t events ){
-    int peer_fd = *static_cast<int*>( conn_info.user_data.get() );
+    // int peer_fd = *static_cast<int*>( conn_info.user_data.get() );
+    int peer_fd =  conn_info.target_fd;
     if(events & EPOLLIN){
       char buffer[4096];
       ssize_t bytes = recv(fd, buffer, sizeof(buffer), MSG_DONTWAIT);
@@ -558,36 +567,6 @@ private:
         close_connection(fd, "Read error during forwarding");
       }
     }
-  }
-
-  void forward_data(int client_socket, int target_socket){
-    fd_set readfds;
-    char buffer[4096];
-    while(true){
-      FD_ZERO(&readfds);
-      FD_SET(client_socket, &readfds);
-      FD_SET(target_socket, &readfds);
-
-      int max_fd = std::max(client_socket, target_socket) + 1;
-      int activity = select(max_fd, &readfds, nullptr, nullptr, nullptr);
-      if(activity < 0){
-        if(errno == EINTR) continue;
-        break;
-      }
-
-      if(FD_ISSET(client_socket, &readfds)){
-        ssize_t bytes = recv(client_socket, buffer, sizeof(buffer), 0);
-        if(bytes <=0) break;
-        if(send(target_socket, buffer, bytes, 0) <=0) break;
-      }
-      if(FD_ISSET(target_socket, &readfds)){
-        ssize_t bytes = recv(target_socket, buffer, sizeof(buffer), 0);
-        if(bytes <=0) break;
-        if(send(client_socket, buffer, bytes, 0) <=0) break;
-      }
-
-    }
-
   }
 
   void send_reply(int client_socket, uint8_t rep, sockaddr_in* bind_addr= nullptr){
@@ -685,11 +664,8 @@ int main(){
   std::vector<std::string> allowed_destinations = config.value("allowed_destinations", std::vector<std::string>());
   std::vector<std::string> blocked_destinations = config.value("blocked_destinations", std::vector<std::string>());
   int max_connections = config.value("max_connections", 2);
-  int timeout = config.value("timeout", 999);
-  // sock5 s5;
+  int timeout = config.value("timeout", 30);
 
-    // sock5(const std::string& username = "", const std::string& password = "",
-    //             int max_connections = 2, time_t timeout=30)
   sock5 s5(usr, pass, max_connections, timeout);
 
   s5.set_allowed_destinations(allowed_destinations);
@@ -700,18 +676,19 @@ int main(){
     return 1;
   }
   // Start monitoring
-  // std::atomic<bool> monitor_running{true};
-  // std::thread monitor_thread([&s5, &monitor_running]() {
-  //   start_monitor(s5, monitor_running);
-  // });
+  std::atomic<bool> monitor_running{true};
+  std::thread monitor_thread([&s5, &monitor_running]() {
+    start_monitor(s5, monitor_running);
+  });
 
-  std::cout << "Proxy running. Press Enter to stop..." << std::endl;
-  std::cin.get();
+  while(1);
+  // std::cout << "Proxy running. Press Enter to stop..." << std::endl;
+  // std::cin.get();
 
-  // monitor_running = false;
-  // if (monitor_thread.joinable()) {
-  //   monitor_thread.join();
-  // }
+  monitor_running = false;
+  if (monitor_thread.joinable()) {
+    monitor_thread.join();
+  }
 
   s5.stop();
   return 0;

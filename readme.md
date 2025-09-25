@@ -1,4 +1,7 @@
 https://github.com/nlohmann/json/releases/download/v3.12.0/json.hpp
+gdb set b in close_connection will stop the server from working, so no response to clients
+because multi-thread is not easy to debug by gdb
+set b in handle_shake first, then the server can handle client connection and stop at close_connection
 
 ### Socks proxy
 Socks proxy server written in one C file. 
@@ -45,10 +48,5 @@ No additional requirements, only compiler or crosscompiler needed
     ./proxy
     
     
-    curl --socks5 user:pass@10.110.198.52:1080 -4 www.baidu.com  
-
-
-
-###
-认证
-
+#### test
+curl --socks5 user:pass@10.110.198.52:1080 -4 www.baidu.com  
