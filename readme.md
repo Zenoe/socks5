@@ -1,3 +1,5 @@
+https://github.com/nlohmann/json/releases/download/v3.12.0/json.hpp
+
 ### Socks proxy
 Socks proxy server written in one C file. 
 Supports socks4, socks4a and socks5 protocols without binding and udp stuff. 
@@ -41,3 +43,12 @@ No additional requirements, only compiler or crosscompiler needed
     make
     make test
     ./proxy
+    
+    
+    curl --socks5 user:pass@10.110.198.52:1080 -4 www.baidu.com  
+
+
+
+###
+认证
+

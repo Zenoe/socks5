@@ -1,7 +1,7 @@
 CC=gcc
 CFLAGS=-c -pthread -Wno-unused-result -g -std=gnu99 -Wall
 LDFLAGS=-pthread
-SOURCES=main.c
+SOURCES=socks5.c
 OBJECTS=$(SOURCES:.c=.o)
 EXECUTABLE=proxy
 

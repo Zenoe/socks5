@@ -1,4 +1,4 @@
-// g++ -std=c++17 -o mysocks5_proxy mysock5.cpp -lpthread -g
+// g++ -std=c++17 -o mysocks5_proxy mysock5.cpp utils.cpp -lpthread -g
 #include <iostream>
 #include <string>
 #include <vector>

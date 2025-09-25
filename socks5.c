@@ -149,6 +149,7 @@ int app_connect(int type, void *buf, unsigned short int portnum)
 	memset(address, 0, ARRAY_SIZE(address));
 
 	if (type == IP) {
+		log_message("app_connect: %s, %d", buf, portnum);
 		char *ip = (char *)buf;
 		snprintf(address, ARRAY_SIZE(address), "%hhu.%hhu.%hhu.%hhu",
 			 ip[0], ip[1], ip[2], ip[3]);
@@ -312,9 +313,26 @@ int socks5_command(int fd)
 	readn(fd, (void *)command, ARRAY_SIZE(command));
 	log_message("Command %hhX %hhX %hhX %hhX", command[0], command[1],
 		    command[2], command[3]);
-	return command[3];
+	return command[1];
 }
+int ssocks5_command(int net_fd) {
+    uint8_t buf[4];
+    if (read(net_fd, buf, 4) != 4) {
+        return -1; // error
+    }
 
+    if (buf[0] != 0x05) {
+        return -1; // not SOCKS5
+    }
+
+    int cmd  = buf[1];
+    int atyp = buf[3];
+
+	printf("------------%d, %d, %d, %d", buf[0], buf[1], buf[2], buf[3]);
+    // Store 'atyp' somewhere else for later use
+
+    return cmd;  // RETURN CMD not ATYP!
+}
 unsigned short int socks_read_port(int fd)
 {
 	unsigned short int p;
@@ -442,12 +460,17 @@ void *app_thread_process(void *fd)
 	switch (version) {
 	case VERSION5: {
 			socks5_auth(net_fd, methods);
+			/* unsigned char buf[10]; */
+			/* read(net_fd, buf, 10); */
+			/* for (int i = 0; i < 10; ++i) */
+			/*   printf("%02x ", buf[i]); */
 			int command = socks5_command(net_fd);
-
+			log_message("command:%d", command);
 			if (command == IP) {
 				char *ip = socks_ip_read(net_fd);
 				unsigned short int p = socks_read_port(net_fd);
 
+				log_message("command is IP: %s", ip);
 				inet_fd = app_connect(IP, (void *)ip, ntohs(p));
 				if (inet_fd == -1) {
 					app_thread_exit(1, net_fd);
@@ -455,6 +478,8 @@ void *app_thread_process(void *fd)
 				socks5_ip_send_response(net_fd, ip, p);
 				free(ip);
 				break;
+			} else if(command == 0x04){
+				// ipv6
 			} else if (command == DOMAIN) {
 				unsigned char size;
 				char *address = socks5_domain_read(net_fd, &size);
@@ -468,6 +493,7 @@ void *app_thread_process(void *fd)
 				free(address);
 				break;
 			} else {
+				log_message("exit");
 				app_thread_exit(1, net_fd);
 			}
 		}
