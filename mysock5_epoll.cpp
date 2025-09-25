@@ -273,9 +273,9 @@ public:
 
     epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr);
 
-    if(conn_info.state == ConnectionState::FORWARDING && conn_info.target_fd){
-      // int peer_fd = *static_cast<int*>(conn_info.user_data.get());
-      int peer_fd = conn_info.target_fd;
+    if(conn_info.state == ConnectionState::FORWARDING && conn_info.user_data){
+      int peer_fd = *static_cast<int*>(conn_info.user_data.get());
+      // int peer_fd = conn_info.target_fd;
       auto peer_it = connections_.find(peer_fd);
       if(peer_it != connections_.end()){
         epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, peer_fd, nullptr);
@@ -296,6 +296,7 @@ public:
     {
       std::lock_guard<std::mutex> lock(connections_mutex_);
       for(const auto& [fd, conn_info] : connections_){
+        std:: cout << now << " " << conn_info.last_activity << " " << now - conn_info.last_activity << std::endl;
         if(now - conn_info.last_activity > connection_timeout_){
           to_remove.push_back(fd);
           ++stats_.connection_timeouts;
@@ -532,14 +533,14 @@ private:
     target_info.target_port = conn_info.target_port;
     target_info.created_at = time(nullptr);
     target_info.last_activity = time(nullptr);
-    // target_info.user_data = std::make_shared<int>(client_socket); // Link to client, why
-    target_info.target_fd = client_socket;
+    target_info.user_data = std::make_shared<int>(client_socket); // Link to client, why
+    // target_info.target_fd = client_socket;
 
     connections_[target_socket] = target_info;
     stats_.active_connections++;
 
-    // conn_info.user_data = std::make_shared<int>(target_socket);
-    conn_info.target_fd = target_socket;
+    conn_info.user_data = std::make_shared<int>(target_socket);
+    // conn_info.target_fd = target_socket;
     conn_info.state = ConnectionState::FORWARDING;
 
     logger_->log(LogLevel::INFO, "Connected to " + conn_info.target_host + ":" +
@@ -552,8 +553,8 @@ private:
   }
 
   void handle_forwarding(int fd, ConnectionInfo& conn_info, uint32_t events ){
-    // int peer_fd = *static_cast<int*>( conn_info.user_data.get() );
-    int peer_fd =  conn_info.target_fd;
+    int peer_fd = *static_cast<int*>( conn_info.user_data.get() );
+    // int peer_fd =  conn_info.target_fd;
     if(events & EPOLLIN){
       char buffer[4096];
       ssize_t bytes = recv(fd, buffer, sizeof(buffer), MSG_DONTWAIT);
